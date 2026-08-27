@@ -1,0 +1,143 @@
+import time
+import random
+import urllib3
+
+# غیرفعال کردن اخطارهای SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+try:
+    from curl_cffi import requests
+except ImportError:
+    import requests
+
+
+def fetch_free_proxies():
+    """دریافت لیست پروکسی‌های رایگان و فعال از API"""
+    api_url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all"
+    try:
+        response = requests.get(api_url, timeout=10)
+        if response.status_code == 200:
+            proxies = [p.strip() for p in response.text.strip().split("\r\n") if p.strip()]
+            print(f"[+] تعداد {len(proxies)} پروکسی رایگان یافت شد.")
+            return proxies
+    except Exception as e:
+        print(f"[-] خطا در دریافت لیست پروکسی: {e}")
+    return []
+
+
+class RenderX3UIClient:
+    def __init__(self, base_url, username, password):
+        self.base_url = base_url.rstrip('/')
+        self.username = username
+        self.password = password
+        self.session = None
+        
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Content-Type": "application/json",
+            "Origin": self.base_url,
+            "Referer": f"{self.base_url}/panel/",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin"
+        }
+
+    def init_session_with_proxy(self, proxy_ip):
+        """ساخت نشست جدید با پروکسی مشخص و TLS Spoofing"""
+        self.session = requests.Session(impersonate="chrome120")
+        proxy_dict = {
+            "http": f"http://{proxy_ip}",
+            "https": f"http://{proxy_ip}"
+        }
+        self.session.proxies = proxy_dict
+
+    def login_with_auto_proxy(self):
+        """تست پروکسی‌ها به ترتیب تا زمان لاگین موفق"""
+        proxies = fetch_free_proxies()
+        
+        if not proxies:
+            print("[!] هیچ پروکسی پیدا نشد، تلاش مستقیم بدون پروکسی...")
+            self.session = requests.Session(impersonate="chrome120")
+            return self._attempt_login()
+
+        # تست ۵ پروکسی اول لیست
+        for proxy in proxies[:5]:
+            print(f"[*] در حال تست پروکسی: {proxy} ...")
+            self.init_session_with_proxy(proxy)
+            if self._attempt_login():
+                print(f"[+] لاگین موفقیت‌آمیز با پروکسی {proxy}")
+                return True
+            time.sleep(1)
+            
+        print("[-] هیچ‌کدام از پروکسی‌های رایگان پاسخ ندادند.")
+        return False
+
+    def _attempt_login(self):
+        login_url = f"{self.base_url}/login"
+        payload = {
+            "username": self.username,
+            "password": self.password
+        }
+        
+        try:
+            response = self.session.post(
+                login_url, 
+                json=payload, 
+                headers=self.headers,
+                timeout=12,
+                verify=False
+            )
+            
+            if response.status_code == 200:
+                res_data = response.json()
+                if res_data.get("success"):
+                    return True
+                else:
+                    print(f"[-] نام کاربری یا رمز اشتباه است: {res_data.get('msg')}")
+                    return False
+            else:
+                print(f"[-] پاسخ ناموفق با کد: {response.status_code}")
+        except Exception:
+            print("[-] خطای ارتباط یا تایم‌اوت پروکسی.")
+            
+        return False
+
+    def get_inbounds(self):
+        """دریافت لیست اینباندها"""
+        if not self.session:
+            print("[-] ابتدا باید لاگین کنید.")
+            return None
+            
+        url = f"{self.base_url}/panel/api/inbounds/list"
+        time.sleep(random.uniform(1.0, 2.0))
+        
+        try:
+            response = self.session.get(url, headers=self.headers, timeout=15, verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    return data.get("obj")
+        except Exception as e:
+            print(f"[-] خطای دریافت دیتا: {e}")
+            
+        return None
+
+
+# --- بخش اجرای اسکریپت ---
+if __name__ == "__main__":
+    PANEL_URL = "https://YOUR_PANEL_DOMAIN_OR_IP:2053"
+    USERNAME = "admin"
+    PASSWORD = "your_password"
+
+    client = RenderX3UIClient(PANEL_URL, USERNAME, PASSWORD)
+    
+    # لاگین خودکار با پروکسی
+    if client.login_with_auto_proxy():
+        inbounds = client.get_inbounds()
+        if inbounds is not None:
+            print(f"[+] تعداد {len(inbounds)} اینباند با موفقیت خوانده شد.")
